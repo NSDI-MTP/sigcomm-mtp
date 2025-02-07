@@ -1,0 +1,416 @@
+/**************  event declarations ***************/
+
+//Sender
+
+event TIMEOUT : TIMER_EVENT {
+    uint32 seq_num;
+}
+
+
+event ACK : INCOMING::NET_EVENT{
+    int32 seq_num;
+}
+
+
+
+event NACK : INCOMING::NET_EVENT{
+    uint32 seq_num;
+}
+
+event PULL : INCOMING::NET_EVENT{
+    uint32 seq_num;
+    uint32 pull_counter;
+
+}
+
+event RETURN_TO_SENDER : INCOMING::NET_EVENT{
+    uint32 seq_num;
+}
+
+event START_SENDING : INCOMING::APP_EVENT{
+    uint32 data_length;
+    addr_t buff_addr;
+}
+
+//Receiver
+
+event DATA_ARRIVAL : INCOMING::NET_EVENT{
+    uint32 seq_num;
+    bool last_packet;
+    addr_t hold_addr;
+    uint32 data_len;
+}
+
+event HEADER_ARRIVAL : INCOMING::NET_EVENT{
+    int32 seq_num;
+}
+
+/**************  NDP packet blueprint  ***************/
+
+pkt_bp NDPBP {
+    uint16 src_port;
+    uint16 dest_port;
+    uint32 seq_num;
+    bool  is_ack;
+    bool  is_nack;
+    bool  is_pull;
+    bool  is_last_packet = false;
+    bool  is_returned;
+    uint32 pull_counter;
+    uint32 connection_id;
+    data_t data;
+}
+
+/****************** contexts and other structs **************/
+
+context MyContext
+{
+    //sender
+    int32 wnd = INITIAL_WINDOW_SIZE; 
+    list<int> data_path_score;
+    list<int> data_path_losses;
+    int32 last_pull_counter;
+    list<NDPBP> to_be_retransmitted;
+    int32 retransmit_start = 0; 
+    int32 retransmit_end = 0; 
+    int32 largest_seq_num_sent;
+    int32 total_acks = 0;
+    int32 total_nacks = 0;
+    int32 returned_packet_count = 0;
+
+    addr_t buff_addr;
+    int32 last_seq_num;
+
+    timer_t timer;
+    int32 RTO;
+
+    //receiver
+    int32 pull_counter=0;
+    int32 connection_id;
+
+    int32 local_ip;
+    int32 remote_ip;
+}
+
+interm_output interm_out {
+    int32 packets_to_send;
+    int32 seq_num;
+}
+
+/****************** extracting instr_out out of packets ********************/
+net_to_transp ntt_module {
+    net_header IPheader {
+        uint16 tot_len;
+        uint16 identification;
+        uint3 flags;
+        uint8 ttl;
+        uint8 protocol;
+        uint16 hdrChecksum;
+        uint32 src_ip;
+        uint32 dst_ip;
+    }
+
+    list<event_t> parse_net_packet(pkt_t p, IPheader i) { 
+        list<event_t> out;
+        NDPBP pkt_bp;
+        p.extract(pkt_bp);
+
+        flow_id id(i.src_ip, i.dst_ip, p.src_port, p.dst_port);
+
+        if(len(pkt_bp.data) > 0) {
+            DATA_ARRIVAL event;
+            event.seq_num = pkt_bp.seq_num;
+            event.last_packet = pkt_bp.is_last_packet;
+            event.hold_addr = pkt_bp.data.addr;
+            event.data_len = len(pkt_bp.data);
+            set_flow_id(event, id);
+            out.add(event);
+        }
+
+        if(pkt_bp.is_ack == 1) {
+            ACK event;
+            event.seq_num = pkt_bp.seq_num;
+            set_flow_id(event, id);
+            out.add(event);
+        }
+
+        if(pkt_bp.is_nack == 1) {
+            NACK event;
+            event.seq_num = pkt_bp.seq_num;
+            set_flow_id(event, id);
+            out.add(event);
+        }
+
+        if(pkt_bp.is_pull == 1) {
+            PULL event;
+            event.seq_num = pkt_bp.seq_num;
+            event.pull_counter = pkt_bp.pull_counter;
+            set_flow_id(event, id);
+            out.add(event);
+        }
+
+        if(len(pkt_bp.data) == 0 && !pkt_bp.is_ack && !pkt_bp.is_nack && !pkt_bp.is_pull) {
+            if(pkt_bp.is_returned){
+                RETURN_TO_SENDER event;
+                event.seq_num = pkt_bp.seq_num;
+                set_flow_id(event, id);
+                out.add(event);
+            }
+            else{
+                HEADER_ARRIVAL event;
+                event.seq_num = pkt_bp.seq_num;
+                set_flow_id(event, id);
+                out.add(event);
+            }
+        }
+
+        return out;
+    }
+}
+
+
+list<instr_t> sendFirstWindow(START_SENDING ev, MyContext ctx, interm_out out) {
+    list<instr_t> instr_out;
+
+    ctx.last_seq_num = ev.data_len/PACKET_SIZE;
+    ctx.buff_addr = ev.buff_addr;
+
+    pkt_bp bp;
+    bp.is_ack = false;
+    bp.is_nack = false;
+    bp.is_pull = false;
+    bp.data = unseg_data(ctx.buff_addr, ctx.wnd*PACKET_SIZE,PACKET_SIZE,[bp::seq_num,0, prev.seq_num+1]);
+    instr_t instr = pkt_gen_instr(ctx.local_ip, ctx.remote_ip, pb);
+    instr_out.add(pkt_ev);
+
+    ctx.largest_seq_num_sent = ctx.wnd;
+
+    return instr_out;
+}
+
+list<instr_t> sendAck(DATA_ARRIVAL ev, MyContext ctx, interm_out out) {
+    list<instr_t> instr_out;
+    
+    pkt_bp bp;
+    bp.seq_num = ev.seq_num;
+    bp.is_ack = true;
+    bp.is_nack = false;
+    bp.is_pull = false;
+
+    instr_t instr = pkt_gen_instr(ctx.local_ip, ctx.remote_ip, pb);
+    instr_out.add(instr);
+
+    return instr_out;
+
+}
+
+list<instr_t> sendNack(HEADER_ARRIVAL ev, MyContext ctx, interm_out out) {
+    list<instr_t> instr_out;
+    
+    pkt_bp bp;
+    bp.seq_num = ev.seq_num;
+    bp.is_ack = false;
+    bp.is_nack = true;
+    bp.is_pull = false;
+
+    instr_t instr = pkt_gen_instr(ctx.local_ip, ctx.remote_ip, pb);
+    instr_out.add(instr);
+
+    return instr_out;
+
+}
+
+list<instr_t> addToPullQueue(DATA_ARRIVAL ev, MyContext ctx, interm_out out) {
+    list<instr_t> instr_out;
+    
+    if(ev.last_packet){
+        instr_t instr = pkt_sched_flush_instr(get_flow_id(ev),PULL_QUEUE);
+        instr_out.add(instr);
+        return instr_out;
+    }
+
+    pkt_bp bp;
+    bp.seq_num = ev.seq_num;
+    bp.is_ack = false;
+    bp.is_nack = false;
+    bp.is_pull = true;
+    bp.pull_counter = ctx.pull_counter;
+    ctx.pull_counter = ctx.pull_counter+1;
+    bp.connection_id = ctx.connection_id;
+
+    instr_t instr = pkt_gen_instr(ctx.local_ip, ctx.remote_ip, pb, sched(get_flow_id(ev),PULL_QUEUE));
+    instr_out.add(instr);
+
+    return instr_out;
+
+}
+
+list<instr_t> retransmitPackets(PULL ev, MyContext ctx, interm_out out) {
+    list<instr_t> instr_out;
+    
+    int32 packets_to_send = ev.pull_counter - ctx.last_pull_counter;
+    if(packets_to_send <0){
+        packets_to_send = 0
+    }
+    ctx.last_pull_counter = ctx.last_pull_counter + packets_to_send;
+
+    for(int i = ctx.retransmit_start ; i < ctx.retransmit_end ; i++){
+        instr_t instr = pkt_gen_instr(ctx.local_ip, ctx.remote_ip, to_be_retransmitted[i]);
+        instr_out.add(instr);
+        packets_to_send = packets_to_send - 1;
+        ctx.retransmit_start = i;
+        if(packets_to_send == 0)
+            break;
+    }
+
+    out.packets_to_send = packets_to_send;
+
+    return instr_out;
+
+}
+
+list<instr_t> sendNewPacket(PULL ev, MyContext ctx, interm_out out) {
+    
+    list<instr_t> instr_out;
+
+    int32 new_packets_to_send = out.packets_to_send;
+    bool mark_last_packet = false;
+
+    if(packets_to_send > 0 && ctx.largest_seq_num_sent != ctx.last_seq_num){
+        if(packets_to_send > ctx.last_seq_num - ctx.largest_seq_num_sent){
+            new_packets_to_send = ctx.last_seq_num - ctx.largest_seq_num_sent - 1;
+            mark_last_packet = true;
+        }
+        pkt_bp bp;
+        bp.is_ack = false;
+        bp.is_nack = false;
+        bp.is_pull = false;
+        bp.data = unseg_data(ctx.buff_addr + ctx.largest_seq_num_sent*PACKET_SIZE, new_packets_to_send*PACKET_SIZE,PACKET_SIZE,[bp::seq_num,ctx.largest_seq_num_sent, prev.seq_num+1]);
+        instr_t instr = pkt_gen_instr(ctx.local_ip, ctx.remote_ip, pb);
+        instr_out.add(instr);
+
+        ctx.largest_seq_num_sent = ctx.largest_seq_num_sent + new_packets_to_send;
+
+        if(mark_last_packet){
+            pkt_bp bp;
+            bp.is_ack = false;
+            bp.is_nack = false;
+            bp.is_pull = false;
+            bp.is_last_packet = true;
+            bp.data = data(ctx.buff_addr + ctx.largest_seq_num_sent*PACKET_SIZE, PACKET_SIZE);
+            instr_t instr = pkt_gen_instr(ctx.local_ip, ctx.remote_ip, pb);
+            instr_out.add(instr);
+
+            ctx.largest_seq_num_sent = ctx.largest_seq_num_sent + 1;
+        }
+
+    }
+
+    return instr_out;
+}
+
+void prepareRetransmission(NACK ev, MyContext ctx, interm_out out) {
+    
+    ctx.total_nacks = ctx.total_nacks + 1;
+
+    pkt_bp bp;
+    bp.seq_num = ev.seq_num;
+    bp.is_ack = false;
+    bp.is_nack = false;
+    bp.is_pull = false;
+    bp.connection_id = ctx.connection_id;
+    bp.data = data(ctx.buff_addr + ev.seq_num*PACKET_SIZE, PACKET_SIZE);
+
+    ctx.to_be_retransmitted[ctx.retransmit_end] = bp;
+    ctx.retransmit_end = ctx.retransmit_end + 1;
+
+}
+
+list<instr_t> recordArrival(ACK ev, MyContext ctx, interm_out out) {
+    list<instr_t> instr_out;
+
+    ctx.total_acks = ctx.total_acks + 1;
+
+    // TODO fill in parameters for notify()
+    intr_t instr = notify();
+    instr_out.add(instr);
+
+    return instr_out;
+
+}
+
+list<instr_t> handleReturnToSender(RETURN_TO_SENDER ev, MyContext ctx, interm_out out) {
+    list<instr_t> instr_out;
+    
+    if((ctx.total_acks + ctx.total_nacks == ctx.last_pull_counter && ctx.last_pull_counter>0) || (ctx.last_pull_counter == 0 && ctx.returned_packet_count == ctx.wnd)){
+        pkt_bp bp;
+        bp.seq_num = ev.seq_num;
+        bp.is_ack = false;
+        bp.is_nack = false;
+        bp.is_pull = false;
+        bp.connection_id = ctx.connection_id;
+        bp.data = bp.data = data(ctx.buff_addr + ev.seq_num*PACKET_SIZE, PACKET_SIZE);
+
+        instr_t instr = pkt_gen_instr(ctx.local_ip, ctx.remote_ip, pb);
+        instr_out.add(instr);
+
+        out.packet_sent = true;
+        out.seq_num = ev.seq_num;
+
+    }
+    ctx.returned_packet_count = ctx.returned_packet_count + 1;
+    return instr_out;
+}
+
+list<instr_t> handleTimeout(TIMEOUT ev, MyContext ctx, interm_out out) {
+    list<instr_t> instr_out;
+    
+    pkt_bp bp;
+    bp.seq_num = ev.seq_num;
+    bp.is_ack = false;
+    bp.is_nack = false;
+    bp.is_pull = false;
+    bp.connection_id = ctx.connection_id;
+    bp.data = bp.data = data(ctx.buff_addr + ev.seq_num*PACKET_SIZE, PACKET_SIZE);
+
+    instr_t instr = pkt_gen_instr(ctx.local_ip, ctx.remote_ip, pb);
+    instr_out.add(instr);
+
+    out.packet_sent = true;
+    out.seq_num = ev.seq_num;
+
+    return instr_out;
+
+}
+
+list<instr_t> setRTO<T>( T ev, MyContext ctx, interm_out out) {
+    list<instr_t> instr_out;
+    
+    TIMEOUT time_ev;
+    time_ev.seq_num = out.seq_num;
+    instr_t instr = timer_start_instr(timer, nanoseconds(ctx.RTO), time_ev); 
+    instr_out.add(instr);
+
+    return instr_out;
+}
+
+list<instr_t> storeData(DATA_ARRIVAL ev, MyContext ctx, interm_out out){
+    list<instr_t> instr_out;
+    instr_t instr = add_data_seg(ev.hold_addr, ev.data_len, get_flow_id(ev), ev.seq_num);
+    instr_out.add(instr);
+    return instr_out;
+}
+
+
+
+dispatch table{
+    START_SENDING -> {sendFirstWindow, setRTO}
+    NACK -> {prepareRetransmission};
+    ACK -> {recordArrival};
+    PULL -> {retransmitPackets, sendNewPackets, setRTO};
+    RETURN_TO_SENDER -> {handleReturnToSender, setRTO}
+    TIMEOUT -> {handleTimeout, setRTO}
+    
+    DATA_ARRIVAL ->{storeData ,sendAck, addToPullQueue}
+    HEADER_ARRIVAL -> {sendNack, addToPullQueue};
+}

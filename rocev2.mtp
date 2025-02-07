@@ -1,0 +1,1246 @@
+/**************  event declarations ***************/
+
+event RDMA_EVENT : INCOMING::APP_EVENT {
+    uint32 wr_id;
+    uint32 lkey;
+    addr_t addr;
+    uint32 length;
+    uint32 qp_id;
+}
+
+event SEND_WQE : RDMA_EVENT {
+    bool ack_req;
+}
+
+event WRITE_WQE : RDMA_EVENT {
+    bool ack_req;
+    uint32 rkey;
+    addr_t raddr; 
+}
+
+event READ_WQE : RDMA_EVENT {
+    uint32 rkey;
+    addr_t raddr; 
+}
+
+event ATOMIC_WQE : RDMA_EVENT {
+    uint32 swap_add;
+    uint32 compare;
+    uint32 rkey;
+    addr_t raddr;
+}
+
+event RECV_WQE : RDMA_EVENT {
+
+}
+
+event TRANSMIT_EVENT : PROG_EVENT {
+    uint32 qp_id;
+    uint32 wr_id;
+    uint32 psn;
+    bool ack_req;
+}
+
+event ACK : INCOMING::NET_EVENT {
+    uint32 qp_id;
+    uint32 wr_id;
+    uint32 psn; 
+    uint32 credit_count;
+    uint32 MSN;
+    uint32 pkt_bytes_size;
+}
+
+event NACK : INCOMING::NET_EVENT {
+    uint32 qp_id;
+    uint32 wr_id;
+    bool type_nack;
+    uint32 psn;
+    uint32 RNR_delay;
+    bool ack_req;
+    uint32 pkt_bytes_size;
+}
+
+event READ_REQ_DATA : INCOMING::NET_EVENT {
+    uint32 qp_id;
+    uint32 wr_id;
+    uint32 psn;
+    addr_t raddr;
+    uint32 rkey;
+    bool ecn;
+    uint32 pkt_bytes_size;
+}
+
+event READ_RESP_DATA : INCOMING::NET_EVENT {
+    uint32 qp_id;
+    uint32 wr_id;
+    uint32 psn;
+    uint32 pkt_bytes_size;
+    addr_t transit_addr;
+}
+
+event WRITE_DATA : INCOMING::NET_EVENT {
+    uint32 qp_id;
+    uint32 wr_id;
+    uint32 psn;
+    bool ack_req;
+    addr_t raddr;
+    uint32 rkey;
+    uint32 length;
+    bool ecn;
+    uint32 pkt_bytes_size;
+    addr_t transit_addr;
+}
+
+event RECV_DATA : INCOMING::NET_EVENT {
+    uint32 qp_id;
+    uint32 wr_id;
+    uint32 psn;
+    bool ack_req;
+    uint32 opcode;
+    bool ecn;
+    uint32 pkt_bytes_size;
+    addr_t transit_addr;
+    uint32 data_len;
+}
+
+event ATOMIC_DATA : INCOMING::NET_EVENT {
+    uint32 qp_id;
+    uint32 swap_add;
+    uint32 compare;
+    uint32 rkey;
+    addr_t raddr;
+    bool ecn;
+    uint32 length;
+    uint32 pkt_bytes_size;
+}
+
+event CNP_CHECK : TIMER_EVENT {
+    uint32 qp_id;
+}
+
+event CNP : INCOMING::NET_EVENT {
+    uint32 qp_id;
+    uint32 pkt_bytes_size;
+}
+
+event ALPHA_CHECK : TIMER_EVENT {
+    uint32 qp_id;
+}
+
+event DCQCN_INCREASE : TIMER_EVENT {
+    uint32 qp_id;
+}
+
+event MISS_ACK : TIMER_EVENT {
+    uint32 qp_id;
+}
+
+/**************  TCP packet blueprint  ***************/
+
+
+pkt_bp UDP_BP {
+    uint32 src_port;
+    uint32 dst_port;
+    uint32 length;
+    uint32 checksum;
+}
+
+pkt_bp BTH_BP {
+    uint32 opcode;
+    bool ack_req;
+    uint32 dest_qp;
+    uint32 psn;
+}
+
+pkt_bp RETH_BP {
+    uint32 raddr;
+    uint32 rkey;
+    uint32 length;
+}
+
+pkt_bp AETH_BP {
+    bool ack;           
+    bool type_nack;     
+    uint32 credit_count;
+    uint32 MSN;
+    uint32 RNR_delay;
+}
+
+pkt_bp AtomicETH_BP {
+    addr_t raddr;
+    uint32 rkey;
+    uint32 swap_add;
+    uint32 compare;
+}
+
+pkt_bp AtomicAckETH_BP {
+    uint32 original_data;
+}
+
+pkt_bp ROCEBP{
+    UDP_BP udp;
+    BTH_BP bth;
+    AETH_BP aeth;
+    RETH_BP reth;
+    AtomicETH_BP atomic_aeth;
+    AtomicAckETH_BP atomic_ack_aeth;
+    data_t data;
+}
+
+/****************** contexts and other structs **************/
+
+
+struct work_comp {
+    uint32 wr_id;
+    uint32 status;
+    uint32 opcode;
+    uint32 qp_id;
+    uint32 length;
+}
+
+struct packet_info {
+    PKT_EVENT pkt_ev;
+    uint32 psn;
+    bool ack_req;
+    uint32 wr_id;
+    bool acked;
+    uint32 SSN;
+    addr_t laddr;
+}
+
+struct responder_packet_info {
+    PKT_EVENT pkt_ev;
+    uint32 wr_id;
+}
+
+interm_output interm_out {
+    uint32 psn;
+    uint32 pkt_counter;
+}
+
+struct SQ_info {
+    RDMA_EVENT event;
+    uint32 initial_psn;
+    uint32 curr_psn;
+    uint32 opcode;
+}
+
+context myContext {
+    uint32 qp_id;
+    uint32 lkey;
+
+    list<SQ_info> SQ_list;
+    uint32 num_SQ_list;
+
+    list<RDMA_EVENT> RQ_list;
+    uint32 num_RQ_list;
+
+    list<packet_info> sent_packets;
+    uint32 num_sent_packets;
+
+    uint32 transport_timer = 1;
+    uint32 nPSN;
+    stream CQ;
+
+    list<responder_packet_info> responder_packets;
+    uint32 num_responder_packets;
+
+    uint32 ePSN;
+    uint32 MSN;
+    uint32 credit_count = 0;
+    uint32 recv_first_psn;
+    uint32 write_first_psn;
+    uint32 read_resp_first_psn;
+
+    uint32 SSN = 0;
+    uint32 LSN = 0;
+
+    uint32 MTU;
+    uint32 init_sqn;
+    uint32 dest_qp;
+    uint32 src_port;
+    uint32 dst_port;
+
+    uint32 Rt;
+    uint32 Rc;
+    uint32 alpha;
+    uint32 byte_counter;
+    uint32 BC;
+    uint32 T1;
+    uint32 F;
+    uint32 Rai;
+    uint32 ecn_found_counter = 0;
+
+    bool first_pkt_connection = true;
+
+    timer_t timer_ack_timeout;
+    timer_t timer_cnp;
+    timer_t timer_alpha;
+    timer_t timer_DCQCN_counter;
+
+    uint32 remove_ip;
+    uint32 local_ip;
+    uint32 last_rcvd_rkey;
+    uint32 local_wr = 0;
+}
+
+
+/****************** extracting events out of packets ********************/
+
+net_to_transp ntt_module {
+    net_header IPheader {
+        uint16 tot_len;
+        uint16 identification;
+        uint3 flags;
+        uint8 ttl;
+        uint8 protocol;
+        uint16 hdrChecksum;
+        uint32 src_ip;
+        uint32 dst_ip;
+    }
+
+    list<instr_t> parse_net_packet(pkt_t p, IPheader i) {
+        list<instr_t> out;
+        UDP_BP udp;
+        p.extract(udp);
+        BTH_BP bth;
+        p.extract(bth);
+        int op = bth.opcode;
+
+        if(op == 4 || op == 0 || op == 2 || op == 1) {
+            RECV_DATA new_event;
+            new_event.qp_id = bth.dest_qp;
+            new_event.psn = bth.psn;
+            new_event.ack_req = bth.ack_req;
+            new_event.opcode = bth.opcode;
+            new_event.ecn = iph.ecn;
+            set_flow_id(new_event, bth.dest_qp);
+            out.add(event);
+
+        } else if(op == 10 || op == 6 || op == 8 || op == 7) {
+            RETH_BP reth;
+            packet.extract(reth);
+            WRITE_DATA new_event;
+            new_event.qp_id = bth.dest_qp;
+            new_event.psn = bth.psn;
+            new_event.ack_req = bth.ack_req;
+            new_event.raddr = reth.raddr;
+            new_event.rkey = reth.rkey;
+            new_event.length = reth.length;
+            new_event.ecn = iph.ecn;
+            set_flow_id(new_event, bth.dest_qp);
+            out.add(event);
+
+        } else if(op == 12) {
+            RETH_BP reth;
+            packet.extract(reth);
+            READ_REQ_DATA new_event;
+            new_event.qp_id = bth.dest_qp;
+            new_event.psn = bth.psn;
+            new_event.raddr = reth.raddr;
+            new_event.rkey = reth.rkey;
+            new_event.ecn = iph.ecn;
+            set_flow_id(new_event, bth.dest_qp);
+            out.add(event);
+
+        } else if(op == 20 || op == 19) {
+            AtomicETH_BP atomicEth;
+            packet.extract(atomicEth);
+            ATOMIC_DATA new_event;
+            new_event.qp_id = bth.dest_qp;
+            new_event.swap_add = atomicEth.swap_add;
+            new_event.compare = atomicEth.compare;
+            new_event.rkey = atomicEth.rkey;
+            new_event.raddr = atomicEth.raddr;
+            new_event.ecn = iph.ecn;
+            set_flow_id(new_event, bth.dest_qp);
+            out.add(event);
+
+        // Common ack/nack or atomic ack
+        } else if(op == 17 || op == 18) {
+            AETH_BP aeth;
+            packet.extract(aeth);
+            if(aeth.ack || op == 18) {
+                ACK new_event;
+                new_event.qp_id = bth.dest_qp;
+                new_event.psn = bth.psn;
+                new_event.credit_count = aeth.credit_count;
+                new_event.MSN = aeth.MSN;
+                set_flow_id(new_event, bth.dest_qp);
+                out.add(event);
+            } else {
+                NACK new_event;
+                new_event.qp_id = bth.dest_qp;
+                new_event.psn = bth.psn;
+                new_event.type_nack = aeth.type_nack;
+                new_event.RNR_delay = aeth.RNR_delay;
+                set_flow_id(new_event, bth.dest_qp);
+                out.add(event);
+            }
+
+        } else if(op == 16 || op == 13 || op == 15 || op == 14) {
+            READ_RESP_DATA new_event;
+            new_event.qp_id = bth.qp_id;
+            new_event.psn = bth.psn;
+            set_flow_id(new_event, bth.dest_qp);
+            out.add(event);
+        }
+        return out;
+    }
+}
+
+/************************ event processor declarations **************************/
+
+list<instr_t> SendProcessor(SEND_WQE ev, myContext ctx, interm_out out);
+list<instr_t> WriteProcessor(WRITE_WQE ev, myContext ctx, interm_out out);
+void RecvProcessor(RECV_WQE ev, myContext ctx, interm_out out);
+list<instr_t> ReadProcessor(READ_WQE ev, myContext ctx, interm_out out);
+list<instr_t> AtomicProcessor(READ_WQE ev, myContext ctx, interm_out out);
+list<instr_t> RecvDataProcessor(RECV_DATA ev, myContext ctx, interm_out out);
+list<instr_t> WriteDataProcessor(WRITE_DATA ev, myContext ctx, interm_out out);
+list<instr_t> ReadReqProcessor(READ_REQ_DATA ev, myContext ctx, interm_out out);
+list<instr_t> ReadRespProcessor(READ_RESP_DATA ev, myContext ctx, interm_out out); 
+list<instr_t> AtomicDataProcessor(ATOMIC_DATA ev, myContext ctx, interm_out out);
+list<instr_t> AckProcessor(ACK ev, myContext ctx, interm_out out);
+list<instr_t> NackProcessor(NACK ev, myContext ctx, interm_out out);
+void RemoveSQProcessor <T>(T ev, myContext ctx, interm_out out);
+list<instr_t> CnpCheckProcessor <T>(T ev, myContext ctx, interm_out out);
+list<instr_t> CnpRepeatProcessor (CNP_CHECK ev, myContext ctx, interm_out out);
+list<instr_t> CnpRateProcessor(CNP ev, myContext ctx, interm_out out);
+list<instr_t> AlphaCheckProcessor(ALPHA_CHECK ev, myContext ctx, interm_out out);
+list<instr_t> DcqcnIncreaseProcessor(DCQCN_INCREASE ev, myContext ctx, interm_out out);
+list<instr_t> MissAckProcessor(MISS_ACK ev, myContext ctx, interm_out out);
+
+/*************************** dispatcher ************************/
+
+
+dispatch table {
+    SEND_WQE    -> {SendProcessor};
+    WRITE_WQE   -> {WriteProcessor};
+    RECV_WQE    -> {RecvProcessor};
+    READ_WQE    -> {ReadProcessor};
+    ATOMIC_WQE  -> {AtomicProcessor};
+    RECV_DATA               -> {CnpCheckProcessor, RecvDataProcessor};
+    WRITE_DATA              -> {CnpCheckProcessor, WriteDataProcessor};
+    READ_REQ_DATA           -> {CnpCheckProcessor, ReadReqProcessor};
+    READ_RESP_DATA          -> {ReadRespProcessor, RemoveSQProcessor};
+    ATOMIC_DATA             -> {CnpCheckProcessor, AtomicDataProcessor};
+    ACK                     -> {AckProcessor, RemoveSQProcessor};
+    NACK                    -> {NackProcessor, RemoveSQProcessor};
+    CNP_CHECK               -> {CnpRepeatProcessor};
+    CNP                     -> {CnpRateProcessor};
+    DCQCN_INCREASE          -> {DcqcnIncreaseProcessor};
+    ALPHA_CHECK             -> {AlphaCheckProcessor};
+    MISS_ACK                -> {MissAckProcessor};
+}
+
+/************************* event processor definitions ****************************/
+
+list<instr_t> SendProcessor(SEND_WQE ev, myContext ctx, interm_out out) {
+    list<instr_t> out;
+
+    if(first_pkt_connection) {
+        ALPHA_CHECK new_event;
+        new_event.qp_id = ev.qp_id;
+        int alpha_timeout = 55;
+        instr_t instr = timer_start_instr(timer_alpha, nanosecond(alpha_timeout), new_event);
+
+        DCQCN_INCREASE new_event2;
+        new_event2.qp_id = ev.qp_id;
+        int DCQCN_timeout = 1500;
+        instr_t instr = timer_start_instr(timer_DCQCN_counter, nanosecond(DCQCN_timeout), new_event2);
+
+        first_pkt_connection = false;
+    }
+
+    if(ev.ack_req) {
+        ctx.SQ_list[ctx.num_SQ_list].event = ev;
+        ctx.SQ_list[ctx.num_SQ_list].operation = 0;
+        ctx.SQ_list[ctx.num_SQ_list].curr_psn = ev.nPSN;
+        ctx.SQ_list[ctx.num_SQ_list].initial_psn = ev.nPSN;
+        ctx.num_SQ_list = ctx.num_SQ_list + 1;
+    }
+
+    if(ev.lkey == ctx.lkey) {
+        ROCEBP roce_bp;
+        roce_bp.bth.ack_req = ev.ack_req;
+        roce_bp.bth.dest_qp = ctx.dest_qp;
+        roce_bp.udp.src_port = ctx.src_port;
+        roce_bp.udp.dst_port = ctx.dst_port;
+
+        roce_bp.data = unseg_data(ev.addr, ev.length, ctx.MTU, [ROCEBP::BTH_BP::opcode, 0, 1, 2],
+            [ROCEBP::BTH_BP::psn, ctx.nPSN, prev.hdr.psn + 1],
+            [ROCEBP::UDP_BP::length, roce_bp.udp.len() + roce_bp.bth.len() + payload_len]);
+
+        ctx.nPSN += ev.length / ctx.MTU;
+        if(ev.length % ctx.MTU != 0)
+            ctx.nPSN += 1;
+
+        instr_t instr = pkt_gen_instr(ctx.local_ip, ctx.remote_ip, roce_bp);
+        out.add(instr);
+    }
+
+    if(ev.ack_req && !is_active(timer_ack_timeout)) {
+        MISS_ACK timer_ev;
+        instr_t instr = timer_start_instr(timer_ack_timeout, second(ctx.transport_timer), timer_ev);
+        out.add(instr);
+    }
+
+    ctx.byte_counter = ctx.byte_counter + ev.length;
+    if(ctx.byte_counter > ctx.BC) {
+        ctx.byte_counter = 0;
+        ctx.BC = ctx.BC + 1;
+    }
+
+    return out;
+}
+
+list<instr_t> WriteProcessor(WRITE_WQE ev, myContext ctx, interm_out out) {
+    list<instr_t> out;
+
+    if(first_pkt_connection) {
+        ALPHA_CHECK new_event;
+        new_event.qp_id = ev.qp_id;
+        int alpha_timeout = 55;
+        instr_t instr = timer_start_instr(timer_alpha, nanosecond(alpha_timeout), new_event);
+
+        DCQCN_INCREASE new_event2;
+        new_event2.qp_id = ev.qp_id;
+        int DCQCN_timeout = 1500;
+        instr_t instr = timer_start_instr(timer_DCQCN_counter, nanosecond(DCQCN_timeout), new_event2);
+
+        first_pkt_connection = false;
+    }
+
+    if(ev.ack_req) {
+        ctx.SQ_list[ctx.num_SQ_list].event = ev;
+        ctx.SQ_list[ctx.num_SQ_list].operation = 6;
+        ctx.SQ_list[ctx.num_SQ_list].curr_psn = ev.nPSN;
+        ctx.SQ_list[ctx.num_SQ_list].initial_psn = ev.nPSN;
+        ctx.num_SQ_list = ctx.num_SQ_list + 1;
+    }
+
+    if(ev.lkey == ctx.lkey) {
+
+        ROCEBP roce_bp;
+        roce_bp.reth.raddr = ev.raddr;
+        roce_bp.reth.rkey = ev.rkey;
+        roce_bp.reth.length = ev.length;
+        roce_bp.bth.ack_req = ev.ack_req;
+        roce_bp.bth.dest_qp = ctx.dest_qp;
+        roce_bp.udp.src_port = ctx.src_port;
+        roce_bp.udp.dst_port = ctx.dst_port;
+
+        roce_bp.data = unseg_data(ev.addr, ev.length, ctx.MTU, [ROCEBP::BTH_BP::opcode, 6, 7, 8],
+            [ROCEBP::BTH_BP::psn, ctx.nPSN, prev.hdr.psn + 1],
+            [ROCEBP::UDP_BP::length, roce_bp.udp.len() + roce_bp.bth.len() + payload_len + roce_bp.reth.len(),
+            roce_bp.udp.len() + roce_bp.bth.len() + payload_len]);
+
+        ctx.nPSN += ev.length / ctx.MTU;
+        if(ev.length % ctx.MTU != 0)
+            ctx.nPSN += 1;
+
+        instr_t instr = pkt_gen_instr(ctx.local_ip, ctx.remote_ip, roce_bp);
+
+        out.add(instr);
+    }
+
+    if(ev.ack_req && !is_active(timer_ack_timeout)) {
+        MISS_ACK timer_ev;
+        instr_t instr = timer_start_instr(timer_ack_timeout, second(ctx.transport_timer), timer_ev);
+        out.add(instr);
+    }
+
+    ctx.byte_counter = ctx.byte_counter + ev.length;
+    if(ctx.byte_counter > ctx.BC) {
+        ctx.byte_counter = 0;
+        ctx.BC = ctx.BC + 1;
+    }
+
+    return out;
+}
+
+void RecvProcessor(RECV_WQE ev, myContext ctx, interm_out out) {
+    ctx.RQ_list[ctx.num_RQ_list] = ev;
+    ctx.num_RQ_list = ctx.num_RQ_list + 1;
+    ctx.credit_count = ctx.credit_count + 1;
+
+    ordered_data_id uid(ev.wr_id, ev.qp_id);
+    new_ordered_data(ev.length, ev.addr, uid);
+}
+
+list<instr_t> ReadProcessor(READ_WQE ev, myContext ctx, interm_out out) {
+    list<instr_t> out;
+
+    if(first_pkt_connection) {
+        ALPHA_CHECK new_event;
+        new_event.qp_id = ev.qp_id;
+        int alpha_timeout = 55;
+        instr_t instr = timer_start_instr(timer_alpha, nanosecond(alpha_timeout), new_event);
+
+        DCQCN_INCREASE new_event2;
+        new_event2.qp_id = ev.qp_id;
+        int DCQCN_timeout = 1500;
+        instr_t instr = timer_start_instr(timer_DCQCN_counter, nanosecond(DCQCN_timeout), new_event2);
+
+        first_pkt_connection = false;
+    }
+
+    ctx.SQ_list[ctx.num_SQ_list].event = ev;
+    ctx.SQ_list[ctx.num_SQ_list].operation = 12;
+    ctx.SQ_list[ctx.num_SQ_list].curr_psn = ev.nPSN;
+    ctx.SQ_list[ctx.num_SQ_list].initial_psn = ev.nPSN;
+    ctx.num_SQ_list = ctx.num_SQ_list + 1;
+
+    ROCEBP roce_bp;
+    roce_bp.reth.raddr = ev.raddr;
+    roce_bp.reth.rkey = ev.rkey;
+    roce_bp.reth.length = ev.length;
+    roce_bp.bth.opcode = 12;
+    roce_bp.bth.psn = ctx.nPSN;
+    roce_bp.bth.ack_req = 0;
+    roce_bp.bth.dest_qp = ctx.dest_qp;
+    roce_bp.udp.src_port = ctx.src_port;
+    roce_bp.udp.dst_port = ctx.dst_port;
+    roce_bp.udp.length = roce_bp.udp.len() + roce_bp.bth.len() + roce_bp.reth.len();
+
+    roce_bp.data = seg_data(NULL, 0);
+
+    instr_t instr = pkt_gen_instr(ctx.local_ip, ctx.remote_ip, roce_bp);
+    out.add(instr);
+
+    ctx.nPSN = ctx.nPSN + uint32(ev.length / ctx.MTU);
+
+    ordered_data_id uid(ev.wr_id, ev.qp_id);
+    new_ordered_data(ev.length, ev.addr, uid);
+
+    if(ev.ack_req && !is_active(timer_ack_timeout)) {
+        MISS_ACK timer_ev;
+        instr_t instr = timer_start_instr(timer_ack_timeout, second(ctx.transport_timer), timer_ev);
+        out.add(instr);
+    }
+
+    return out;
+}
+
+list<instr_t> AtomicProcessor(READ_WQE ev, myContext ctx, interm_out out) {
+    list<instr_t> out;
+
+    if(first_pkt_connection) {
+        ALPHA_CHECK new_event;
+        new_event.qp_id = ev.qp_id;
+        int alpha_timeout = 55;
+        instr_t instr = timer_start_instr(timer_alpha, nanosecond(alpha_timeout), new_event);
+
+        DCQCN_INCREASE new_event2;
+        new_event2.qp_id = ev.qp_id;
+        int DCQCN_timeout = 1500;
+        instr_t instr = timer_start_instr(timer_DCQCN_counter, nanosecond(DCQCN_timeout), new_event2);
+
+        first_pkt_connection = false;
+    }
+
+    ctx.SQ_list[ctx.num_SQ_list].event = ev;
+    ctx.SQ_list[ctx.num_SQ_list].operation = 19;
+    ctx.SQ_list[ctx.num_SQ_list].curr_psn = ev.nPSN;
+    ctx.SQ_list[ctx.num_SQ_list].initial_psn = ev.nPSN;
+    ctx.num_SQ_list = ctx.num_SQ_list + 1;
+
+    ROCEBP roce_bp;
+    roce_bp.atom_aeth.raddr = ev.raddr;
+    roce_bp.atom_aeth.rkey = ev.rkey;
+    roce_bp.atom_aeth.swap_add = ev.swap_add;
+    roce_bp.atom_aeth.compare = ev.compare;
+    roce_bp.bth.ack_req = ev.ack_req;
+    roce_bp.bth.dest_qp = ctx.dest_qp;
+    roce_bp.udp.src_port = ctx.src_port;
+    roce_bp.udp.dst_port = ctx.dst_port;
+    roce_bp.udp.length = roce_bp.udp.len() + roce_bp.bth.len() + roce_bp.aeth.len();
+
+    if(ev.compare == -1)  
+        roce_bp.bth.opcode = 20;
+    else                   
+        roce_bp.bth.opcode = 19;
+
+    ctx.nPSN = ctx.nPSN + 1;
+
+    instr_t instr = pkt_gen_instr(ctx.local_ip, ctx.remote_ip, roce_bp);
+    out.add(instr);
+
+    if(ev.ack_req && !is_active(timer_ack_timeout)) {
+        MISS_ACK timer_ev;
+        instr_t instr = timer_start_instr(timer_ack_timeout, second(ctx.transport_timer), timer_ev);
+        out.add(instr);
+    }
+
+    return out;
+}
+
+list<instr_t> RecvDataProcessor(RECV_DATA ev, myContext ctx, interm_out out) {
+    list<instr_t> out;
+    ROCEBP roce_bp;
+
+    if(ctx.credit_count > 0) {
+        if(ev.psn == ctx.ePSN && (ev.opcode == 0 || ev.opcode == 4)) {     
+            ctx.recv_first_psn = ev.psn;
+        }
+        if(ev.psn <= ctx.ePSN) {       
+            roce_bp.aeth.ack = true;
+            roce_bp.aeth.MSN = ctx.MSN;
+            if(ev.psn == ctx.ePSN && (ev.opcode == 2 || ev.opcode == 4))       
+                ctx.credit_count = ctx.credit_count - 1;
+            roce_bp.aeth.credit_count = ctx.credit_count;
+        } else {                       
+            roce_bp.aeth.ack = false;
+            roce_bp.aeth.type_nack = true;
+        }
+        roce_bp.bth.opcode = 17;
+        roce_bp.bth.dest_qp = ctx.dest_qp;
+        roce_bp.bth.psn = ctx.ePSN;
+        roce_bp.udp.src_port = ctx.src_port;
+        roce_bp.udp.dst_port = ctx.dst_port;
+        roce_bp.udp.length = roce_bp.udp.len() + roce_bp.bth.len() + roce_bp.aeth.len();
+
+        if(ev.psn == ctx.ePSN) {
+            ctx.ePSN = ctx.ePSN + 1;
+            addr_t addr = ctx.RQ_list[0].addr;
+            ordered_data_id uid(ctx.RQ_list[0].wr_id, ctx.RQ_list[0].qp_id);
+            uint32 diff_psn = ev.psn - ctx.recv_first_psn;
+
+            add_data_seg(addr, ev.data_len, uid, diff_psn * ctx.MTU);
+
+            if(ev.opcode == 2 || ev.opcode == 4) {
+                instr_t flush_instr = flush_and_notify(uid, ctx.RQ_list[0].length, addr);
+                out.add(flush_instr);
+
+                for(uint32 i = 0; i < ctx.num_RQ_list - 1; i = i + 1) {
+                    ctx.RQ_list[i] = ctx.RQ_list[i + 1];
+                }
+                ctx.num_RQ_list = ctx.num_RQ_list - 1;
+            }
+        }
+        if(ev.ack_req || !roce_bp.aeth.ack) {
+            roce_bp.data = seg_data(NULL, 0);
+            instr_t instr = pkt_gen_instr(ctx.local_ip, ctx.remote_ip, roce_bp);
+            out.add(inst);
+        }
+    } else {
+        roce_bp.aeth.ack = false;
+        roce_bp.aeth.type_nack = false;
+        roce_bp.bth.opcode = 17;
+        roce_bp.bth.dest_qp = ctx.dest_qp;
+        roce_bp.bth.psn = ctx.ePSN;
+        roce_bp.udp.src_port = ctx.src_port;
+        roce_bp.udp.dst_port = ctx.dst_port;
+        roce_bp.udp.length = roce_bp.udp.len() + roce_bp.bth.len() + roce_bp.aeth.len();
+
+        roce_bp.data = seg_data(NULL, 0);
+        instr_t instr = pkt_gen_instr(ctx.local_ip, ctx.remote_ip, roce_bp);
+        out.add(inst);
+    }
+
+    return out;
+}
+
+list<instr_t> WriteDataProcessor(WRITE_DATA ev, myContext ctx, interm_out out) {
+    list<instr_t> out;
+
+    ROCEBP roce_bp;
+
+    FB_EVENT fb_new_event;
+    fb_new_event.write_to_mem = false;
+    fb_new_event.fb_type = 1;
+    fb_new_event.bytes = ev.pkt_bytes_size;
+    fb_new_event.transit_addr = ev.transit_addr;
+    events.add(fb_new_event);
+
+    if(ev.psn == ctx.ePSN && (ev.opcode == 6 || ev.opcode == 10)) {       
+        ctx.write_first_psn = ev.psn;
+
+        ordered_data_id uid(ctx.local_wr, ev.qp_id);
+        new_ordered_data(ev.length, ev.addr, uid);
+
+        ctx.last_rcvd_rkey = ev.rkey;
+
+        ctx.local_wr += 1;
+    }
+    if(ev.psn <= ctx.ePSN) {      
+        roce_bp.aeth.ack = true;
+        roce_bp.aeth.MSN = ctx.MSN;
+        roce_bp.aeth.credit_count = ctx.credit_count;
+    } else {                     
+        roce_bp.aeth.ack = false;
+        roce_bp.aeth.type_nack = true;
+    }
+    roce_bp.bth.opcode = 17;
+    roce_bp.bth.dest_qp = ctx.dest_qp;
+    roce_bp.bth.psn = ctx.ePSN;
+    roce_bp.udp.src_port = ctx.src_port;
+    roce_bp.udp.dst_port = ctx.dst_port;
+    roce_bp.udp.length = roce_bp.udp.len() + roce_bp.bth.len() + roce_bp.aeth.len();
+
+    if(ev.psn == ctx.ePSN) {
+        ctx.ePSN = ctx.ePSN + 1;
+        addr_t addr = ev.raddr;
+
+        ordered_data_id uid(ev.wr_id, ctx.last_rcvd_rkey);
+        uint32 diff_psn = ev.psn - ctx.write_first_psn;
+
+        add_data_seg(addr, ev.data_len, uid, diff_psn * ctx.MTU);
+    }
+    if(ev.ack_req || !roce_bp.aeth.ack) {    
+        roce_bp.data = seg_data(NULL, 0);
+        instr_t instr = pkt_gen_instr(ctx.local_ip, ctx.remote_ip, roce_bp);
+        out.add(inst);
+    }
+
+    return out;
+}
+
+list<instr_t> ReadReqProcessor(READ_REQ_DATA ev, myContext ctx, interm_out out) {
+    list<instr_t> out;
+
+    ROCEBP roce_bp;
+
+    if(ev.psn == ctx.ePSN) {
+        roce_bp.aeth.ack = true;
+        roce_bp.aeth.MSN = ctx.MSN;
+        roce_bp.aeth.credit_count = ctx.credit_count;
+        roce_bp.bth.dest_qp = ctx.dest_qp;
+        roce_bp.udp.src_port = ctx.src_port;
+        roce_bp.udp.dst_port = ctx.dst_port;
+
+        roce_bp.data = unseg_data(ev.addr, ev.length, ctx.MTU, [ROCEBP::BTH_BP::opcode, 13, 14, 15],
+            [ROCEBP::BTH_BP::psn, ctx.ePSN, prev.hdr.psn + 1],
+            [ROCEBP::UDP_BP::length, roce_bp.udp.len() + roce_bp.bth.len() + roce_bp.aeth.len() + payload_len,
+            roce_bp.udp.len() + roce_bp.bth.len() + payload_len]);
+
+        ctx.ePSN += ev.length / ctx.MTU;
+        if(ev.length % ctx.MTU != 0)
+            ctx.ePSN += 1;
+
+        instr_t instr = pkt_gen_instr(ctx.local_ip, ctx.remote_ip, roce_bp);
+        out.add(instr);
+
+    } else if(ev.psn < ctx.ePSN) { 
+        roce_bp.aeth.ack = true;
+        roce_bp.aeth.MSN = ctx.MSN;
+        roce_bp.aeth.credit_count = ctx.credit_count;
+        roce_bp.bth.opcode = 17;
+        roce_bp.bth.dest_qp = ctx.dest_qp;
+        roce_bp.bth.psn = ctx.ePSN;
+        roce_bp.udp.src_port = ctx.src_port;
+        roce_bp.udp.dst_port = ctx.dst_port;
+        roce_bp.udp.length = roce_bp.udp.len() + roce_bp.bth.len() + roce_bp.aeth.len();
+
+        roce_bp.data = seg_data(NULL, 0);
+        instr_t instr = pkt_gen_instr(ctx.local_ip, ctx.remote_ip, roce_bp);
+        out.add(instr);
+
+    } else {                      
+        roce_bp.aeth.ack = false;
+        roce_bp.aeth.type_nack = true;
+        roce_bp.bth.opcode = 17;
+        roce_bp.bth.dest_qp = ctx.dest_qp;
+        roce_bp.bth.psn = ctx.ePSN;
+        roce_bp.udp.src_port = ctx.src_port;
+        roce_bp.udp.dst_port = ctx.dst_port;
+        roce_bp.udp.length = 8 + bth.len() + aeth.len();
+
+        roce_bp.data = seg_data(NULL, 0);
+        instr_t instr = pkt_gen_instr(ctx.local_ip, ctx.remote_ip, roce_bp);
+        out.add(instr);
+    }
+
+    return out;
+}
+
+list<instr_t> ReadRespProcessor(READ_RESP_DATA ev, myContext ctx, interm_out out) {
+    list<instr_t> out;
+
+    if(ev.psn == ctx.SQ_list[0].curr_psn) {
+
+        if(ev.opcode == 13) {
+            ctx.read_resp_first_psn = ev.psn;
+        }
+
+        ctx.SQ_list[0].curr_psn += 1;
+        addr_t addr = ctx.SQ_list[0].event.addr;
+        ordered_data_id uid(ctx.SQ_list[0].event.wr_id, ctx.SQ_list[0].event.qp_id);
+        uint32 diff_psn = ev.psn - ctx.read_resp_first_psn;
+
+        add_data_seg(addr, ev.data_len, uid, diff_psn * ctx.MTU);
+
+        bool ack_req = false;
+        for(uint32 i = 0; i < ctx.num_SQ_list; i = i + 1) {
+            if(ctx.SQ_list.event.ack_req) {
+                ack_req = true;
+                MISS_ACK timer_ev;
+                instr_t instr = timer_restart_instr(timer_ack_timeout, second(ctx.transport_timer), timer_ev);
+                out.add(instr);
+                break;
+            }
+        }
+        if(ack_req) {
+            MISS_ACK timer_ev;
+            instr_t instr = timer_restart_instr(timer_ack_timeout, second(ctx.transport_timer), timer_ev);
+            out.add(instr);
+        } else {
+            instr_t instr = timer_cancel_instr(timer_ack_timeout);
+            out.add(instr);
+        }
+    }
+    return out;
+}
+
+list<instr_t> AtomicDataProcessor(ATOMIC_DATA ev, myContext ctx, interm_out out) {
+    list<instr_t> out;
+
+    ROCEBP roce_bp;
+
+    if(ev.psn <= ctx.ePSN) {
+        if(ev.psn == ctx.ePSN) {
+            // Atomic operation
+            roce_bp.atomic_ack_eth.original_data = 0;
+            ctx.ePSN += 1;
+            roce_bp.udp.length = roce_bp.udp.len() + roce_bp.bth.len() + roce_bp.aeth.len() + roce_bp.atom_ack_eth.len();
+        } else {
+            roce_bp.udp.length = roce_bp.udp.len() + roce_bp.bth.len() + roce_bp.aeth.len();
+        }
+        roce_bp.aeth.ack = true;
+        roce_bp.aeth.MSN = ctx.MSN;
+        roce_bp.aeth.credit_count = ctx.credit_count;
+        roce_bp.bth.opcode = 17;
+        roce_bp.bth.dest_qp = ctx.dest_qp;
+        roce_bp.bth.psn = ctx.ePSN;
+        roce_bp.udp.src_port = ctx.src_port;
+        roce_bp.udp.dst_port = ctx.dst_port;
+
+        roce_bp.data = seg_data(NULL, 0);
+        instr_t instr = pkt_gen_instr(ctx.local_ip, ctx.remote_ip, roce_bp);
+        out.add(instr);
+    } else {                       
+        roce_bp.aeth.ack = false;
+        roce_bp.aeth.type_nack = true;
+        roce_bp.bth.opcode = 17;
+        roce_bp.bth.dest_qp = ctx.dest_qp;
+        roce_bp.bth.psn = ctx.ePSN;
+        roce_bp.udp.src_port = ctx.src_port;
+        roce_bp.udp.dst_port = ctx.dst_port;
+        roce_bp.udp.length = roce_bp.udp.len() + roce_bp.bth.len() + roce_bp.aeth.len();
+
+        roce_bp.data = seg_data(NULL, 0);
+        instr_t instr = pkt_gen_instr(ctx.local_ip, ctx.remote_ip, roce_bp);
+        out.add(instr);
+    }   
+    return out;
+}
+
+list<instr_t> AckProcessor(ACK ev, myContext ctx, interm_out out) {
+    list<instr_t> out;
+
+    if(ctx.SQ_list[0].curr_psn != ev.psn) {
+        ROCEBP roce_bp;
+        roce_bp.bth.ack_req = ev.ack_req;
+        roce_bp.bth.psn = ev.psn;
+        roce_bp.bth.dest_qp = ctx.dest_qp;
+        roce_bp.udp.src_port = ctx.src_port;
+        roce_bp.udp.dst_port = ctx.dst_port;
+
+        uint32 offset = (ev.psn - ctx.SQ_list[0].event.psn) * ctx.MTU;
+
+        if(ctx.SQ_list[0].operation == 0) {
+            if(ctx.SQ_list[0].initial_psn == ev.psn)
+                roce_bp.bth.opcode = 0;
+            else if(ctx.SQ_list[0].event.length - offset >= ctx.MTU)
+                roce_bp.bth.opcode = 1;
+            else
+                roce_bp.bth.opcode = 2;
+
+        } else if(ctx.SQ_list[0].operation == 6) {
+            if(ctx.SQ_list[0].initial_psn == ev.psn)
+                roce_bp.bth.opcode = 6;
+            else if(ctx.SQ_list[0].event.length - offset >= ctx.MTU)
+                roce_bp.bth.opcode = 7;
+            else
+                roce_bp.bth.opcode = 8;
+        }
+
+        if(ctx.SQ_list[0].event.length - offset >= ctx.MTU)
+            roce_bp.data = seg_data(ev.addr + offset, ctx.MTU);
+        else
+            roce_bp.data = seg_data(ev.addr + offset, ctx.SQ_list[0].event.length - offset);
+
+        instr_t instr = pkt_gen_instr(ctx.local_ip, ctx.remote_ip, roce_bp);
+        out.add(instr);
+    } else {
+        ctx.LSN = ev.credit_count + ev.MSN;
+        ctx.SQ_list[0].curr_psn += 1;
+        
+        bool expects_ack = false;
+        if(ctx.num_SQ_list > 1 && ctx.SQ_list[0].curr_psn == ctx.SQ_list[1].initial_psn) {
+            for(uint32 i = 1; i < ctx.num_SQ_list; i += 1) {
+                if(ctx.SQ_list[i].ack_req) 
+                    expects_ack = true;
+            }
+        }
+        if(expects_ack) {
+            MISS_ACK timer_ev;
+            instr_t instr = timer_start_instr(timer_ack_timeout, second(ctx.transport_timer), timer_ev);
+            out.add(instr);
+        } else {
+            instr_t instr = timer_cancel_instr(timer_ack_timeout);
+            out.add(instr);
+        }
+    }
+    return out;
+}
+
+list<instr_t> NackProcessor(NACK ev, myContext ctx, interm_out out) {
+    list<instr_t> out;
+
+    ROCEBP roce_bp;
+    roce_bp.bth.ack_req = ev.ack_req;
+    roce_bp.bth.psn = ev.psn;
+    roce_bp.bth.dest_qp = ctx.dest_qp;
+    roce_bp.udp.src_port = ctx.src_port;
+    roce_bp.udp.dst_port = ctx.dst_port;
+
+    uint32 offset = (ev.psn - ctx.SQ_list[0].event.psn) * ctx.MTU;
+
+    if(ctx.SQ_list[0].operation == 0) {
+        if(ctx.SQ_list[0].initial_psn == ev.psn)
+            roce_bp.bth.opcode = 0;
+        else if(ctx.SQ_list[0].event.length - offset >= ctx.MTU)
+            roce_bp.bth.opcode = 1;
+        else
+            roce_bp.bth.opcode = 2;
+
+    } else if(ctx.SQ_list[0].operation == 6) {
+        if(ctx.SQ_list[0].initial_psn == ev.psn)
+            roce_bp.bth.opcode = 6;
+        else if(ctx.SQ_list[0].event.length - offset >= ctx.MTU)
+            roce_bp.bth.opcode = 7;
+        else
+            roce_bp.bth.opcode = 8;
+    }
+
+    if(ctx.SQ_list[0].event.length - offset >= ctx.MTU)
+        roce_bp.data = seg_data(ev.addr + offset, ctx.MTU);
+    else
+        roce_bp.data = seg_data(ev.addr + offset, ctx.SQ_list[0].event.length - offset);
+
+    instr_t instr = pkt_gen_instr(ctx.local_ip, ctx.remote_ip, roce_bp);
+    out.add(instr);
+
+    return out;
+}
+
+void RemoveSQProcessor <T>(T ev, myContext ctx, interm_out out) {
+    uint32 remove_counter = 1;
+
+    for(uint32 i = 1; i < ctx.num_SQ_list; i += 1) {
+        if(!ctx.SQ_list[i].ack_req)
+            break;
+        remove_counter += 1;
+    }
+
+    if(ctx.SQ_list[0].curr_psn == ctx.SQ_list[1].initial_psn) {
+        for(uint32 i = 0; i < ctx.num_SQ_list - remove_counter; i += 1) {
+            addr_t addr = ctx.SQ_list[0].event.addr;
+            ordered_data_id uid(ctx.SQ_list[0].event.wr_id, ctx.SQ_list[0].event.qp_id);
+
+            if(ctx.SQ_list[0].operation == 0 || ctx.SQ_list[0].operation == 6) {
+                instr_t notify = notify_instr();
+                out.add(notify);
+            } else {
+                instr_t flush_instr = flush_and_notify(uid, ctx.SQ_list[0].event.length, addr);
+                out.add(flush_instr);
+            }
+
+            ctx.SQ_list[i] = ctx.SQ_list[i + remove_counter];
+        }
+        ctx.num_SQ_list = ctx.num_SQ_list - remove_counter;
+    }
+}
+
+list<instr_t> CnpCheckProcessor <T>(T ev, myContext ctx, interm_out out) {
+    list<instr_t> out;
+
+    if(ev.ecn) {
+        ctx.ecn_found_counter = ctx.ecn_found_counter + 1;
+        ROCEBP roce_bp;
+        roce_bp.bth.opcode = 129;
+        roce_bp.bth.ack_req = false;
+        roce_bp.bth.dest_qp = ev.qp_id;
+        roce_bp.bth.psn = 0;
+        roce_bp.udp.src_port = ctx.src_port;
+        roce_bp.udp.dst_port = ctx.dst_port;
+        roce_bp.udp.length = roce_bp.udp.len() + roce_bp.bth.len();
+        roce_bp.data = seg_data(NULL, 0);
+
+        instr_t instr = pkt_gen_instr(ctx.local_ip, ctx.remote_ip, roce_bp);
+        out.add(instr);
+
+        CNP_CHECK new_event;
+        new_event.qp_id = ev.qp_id;
+
+        instr_t timer_instr = timer_restart_instr(timer_cnp, microsecond(50), new_event);
+        ctx.ecn_found_counter = 0;
+    }
+    return out;
+}
+
+list<instr_t> CnpRepeatProcessor (CNP_CHECK ev, myContext ctx, interm_out out) {
+    list<instr_t> out;
+
+    if(ctx.ecn_found_counter > 0) {
+        ROCEBP roce_bp;
+
+        roce_bp.BTH_BP bth;
+        roce_bp.bth.opcode = 129;
+        roce_bp.bth.ack_req = false;
+        roce_bp.bth.dest_qp = ev.qp_id;
+        roce_bp.bth.psn = 0;
+        roce_bp.udp.src_port = ctx.src_port;
+        roce_bp.udp.dst_port = ctx.dst_port;
+        roce_bp.udp.length = roce_bp.udp.len() + bth.len();
+        roce_bp.data = seg_data(NULL, 0);
+
+        instr_t instr = pkt_gen_instr(ctx.local_ip, ctx.remote_ip, roce_bp);
+        out.add(instr);
+
+        instr_t timer_instr = timer_restart_instr(timer_cnp, microsecond(50), ev);
+        out.add(timer_instr);
+    } else {
+        instr_t timer_instr = timer_cancel_instr(timer_cnp);
+        out.add(timer_instr);
+    }
+
+    return out;
+}
+
+list<instr_t> CnpRateProcessor(CNP ev, myContext ctx, interm_out out) {
+    list<instr_t> out;
+
+    uint32 Rc = ctx.Rc;
+    uint32 alpha = ctx.alpha;
+
+    ctx.Rt = Rc;
+    ctx.Rc = Rc * (1 - alpha / 2);
+    ctx.alpha = (1 - 1/16) * alpha + 1/16;
+
+    int alpha_timeout = 55;
+    instr_t timer_instr = timer_restart_instr(timer_alpha, nanosecond(alpha_timeout), ev);
+    out.add(timer_instr);
+
+    return out;
+}
+
+list<instr_t> AlphaCheckProcessor(ALPHA_CHECK ev, myContext ctx, interm_out out) {
+    list<instr_t> out;
+    uint32 alpha = ctx.alpha;
+
+    ctx.alpha = (1 - 1/16) * alpha;
+
+    int alpha_timeout = 55;
+    instr_t timer_instr = timer_restart_instr(timer_alpha, nanosecond(alpha_timeout), ev);
+    out.add(timer_instr);
+
+    return out;
+}
+
+
+list<instr_t> DcqcnIncreaseProcessor(DCQCN_INCREASE ev, myContext ctx, interm_out out) {
+    list<instr_t> out;
+    uint32 maximum;
+    uint32 minimum;
+
+    ctx.T1 += 1;
+
+    if(ctx.T1 > ctx.BC) {
+        maximum = ctx.T1;
+        minimum = ctx.BC;
+    } else if(ctx.T1 < ctx.BC) {
+        maximum = ctx.BC;
+        minimum = ctx.T1;
+    } else {
+        maximum = ctx.BC;
+        minimum = maximum;
+    }
+
+    if(maximum < ctx.F) {
+        ctx.Rc = (ctx.Rt + ctx.Rc) / 2;
+    } else if(minimum > ctx.F) {
+        ctx.Rt = ctx.Rai * (minimum - ctx.F + 1);
+        ctx.Rc = (ctx.Rt + ctx.Rc) / 2;
+    } else {
+        ctx.Rt = ctx.Rt + ctx.Rai;
+        ctx.Rc = (ctx.Rt + ctx.Rc) / 2;
+    }
+
+    instr_t instr = pkt_sched_set_instr(ev.flow_id, ctx.Rc);
+    out.add(instr);
+
+    DCQCN_INCREASE new_event;
+    new_event.qp_id = ev.qp_id;
+    events.add(new_event);
+
+    instr_t timer_instr = timer_restart_instr(timer_DCQCN_counter, nanosecond(alpha_timeout), new_event);
+
+    out.add(timer_instr);
+
+    return out;
+}
+
+list<instr_t> MissAckProcessor(MISS_ACK ev, myContext ctx, interm_out out) {
+    list<instr_t> out;
+
+    ROCEBP roce_bp;
+
+    roce_bp.bth.ack_req = ctx.SQ_info[0].event.ack_req;
+    roce_bp.bth.psn = ctx.SQ_info[0].event.psn;
+    roce_bp.bth.dest_qp = ctx.dest_qp;
+    roce_bp.udp.src_port = ctx.src_port;
+    roce_bp.udp.dst_port = ctx.dst_port;
+
+    uint32 offset = (ctx.SQ_info[0].curr_psn - ctx.SQ_list[0].initial_psn) * ctx.MTU;
+
+    if(ctx.SQ_list[0].operation == 0) {
+        if(ctx.SQ_list[0].initial_psn == ev.psn)
+            roce_bp.bth.opcode = 0;
+        else if(ctx.SQ_list[0].event.length - offset >= ctx.MTU)
+            roce_bp.bth.opcode = 1;
+        else
+            roce_bp.bth.opcode = 2;
+
+    } else if(ctx.SQ_list[0].operation == 6) {
+        if(ctx.SQ_list[0].initial_psn == ev.psn) {
+            roce_bp.bth.opcode = 6;
+            roce_bp.reth.raddr = ctx.SQ_info[0].event.raddr;
+            roce_bp.reth.rkey = ctx.SQ_info[0].event.rkey;
+            roce_bp.reth.length = ctx.SQ_info[0].event.length;
+        } else if(ctx.SQ_list[0].event.length - offset >= ctx.MTU)
+            roce_bp.bth.opcode = 7;
+        else
+            roce_bp.bth.opcode = 8;
+    } else if(ctx.SQ_list[0].operation == 12) {
+        roce_bp.bth.opcode = 12;
+        roce_bp.reth.raddr = ctx.SQ_info[0].event.raddr;
+        roce_bp.reth.rkey = ctx.SQ_info[0].event.rkey;
+        roce_bp.reth.length = ctx.SQ_info[0].event.length;
+        roce_bp.data = seg_data(NULL, 0);
+    }
+
+    if(ctx.SQ_list[0].operation == 0 || ctx.SQ_list[0].operation == 6) {
+        if(ctx.SQ_list[0].event.length - offset >= ctx.MTU)
+            roce_bp.data = seg_data(ev.addr + offset, ctx.MTU);
+        else
+            roce_bp.data = seg_data(ev.addr + offset, ctx.SQ_list[0].event.length - offset);
+    }
+
+    instr_t instr = pkt_gen_instr(ctx.local_ip, ctx.remote_ip, roce_bp);
+    out.add(instr);
+
+    return out;
+}
