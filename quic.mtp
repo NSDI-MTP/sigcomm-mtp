@@ -1,0 +1,611 @@
+/**************  event declarations ***************/
+
+event SEND : PROG_EVENT{
+    int32 flow_id;
+}
+
+event TIMER : TIMER_EVENT {
+
+}
+
+event ACK : INCOMING::NET_EVENT{
+    int32 flow_id;
+    list<int32> pkt_nums;
+    int32 pkt_nums_counter;
+    int32 largest;
+    int32 largest_acked;
+    int32 ECT0_Count;
+    int32 ECT1_Count;
+    int32 ECN_CE_Count;
+}
+
+event ADD_DATA : INCOMING::APP_EVENT{
+    bool server_side;
+    bool direction;
+    bool server_stream;
+    int32 data_length;
+    addr_t address;
+}
+
+event DATA_ARRIVAL : INCOMING::NET_EVENT{
+    list<StreamFrameBP> frames;
+    list<int32> frames_size;
+    int32 packet_id;
+}
+
+event PKT_EVENT : OUTGOING::NET_EVENT {
+    int32 hdr_combination;
+    QuicHeader qheader;
+    bool read_from_mem;
+    list<Frame> frames;
+    int32 frames_size = 0;
+    addr_t address;
+    int32 length;
+}
+
+/**************  QUIC packet blueprint  ***************/
+
+pkt_bp StreamFrameBP{
+    int32 frameType;
+    int32 data_length;
+    int32 stream_id;
+    int32 offset;
+    data_t data;
+}
+
+pkt_bp ACKFrameBP{
+    int32 frameType;
+    int32 largest_acked;
+    float ack_delay;
+    int32 range_count;
+    int32 first_ack_range;
+    list<AckRange> ack_ranges;
+    int32 ack_ranges_size = 0;
+    int32 ecn_count;
+}
+
+pkt_pb QUICBP{
+    int32 frames_size = 0;
+    int32 pkt_id;
+    data_t frames = bp_list({StreamFrameBP,ACKFrameBP});
+}
+
+pkt_bp UDPBP{
+
+    int16 src_port;
+    int16 dst_port;
+    int16 length;
+    checksum16_t checksum;
+    QUICBP pkt;
+}
+
+struct QuicStream
+{
+    addr_t address;
+    int32 id;
+    int32 frame_size_limit;
+    int32 last_sent;
+    int32 length;
+    list<bool> acked_frames;
+}
+
+struct QuicStreamBuffer
+{
+    int32 id;
+    stream data;
+    int32 offset;
+    list<bool> received;
+    addr_t address;
+
+}
+
+struct PacketInfo
+{
+    int32 packet_id;
+    int32 time_sent;
+    bool in_flight;
+    bool ack_eliciting;
+    int32 size;
+    QUICBP pkt;
+    int32 list_size = 0;
+}
+
+struct Frame
+{
+    int32 data_length;
+    int32 stream_id;
+    int32 offset;
+}
+
+context MyContext
+{
+    addr_t data_addr;
+
+    int32 number_streams;
+
+    list<QuicStream> streams;
+    list<Frame> retransmit_frames;
+    int32 streams_size = 0;
+    list<PacketInfo> sent_packets;
+    int32 sent_packets_size = 0;
+    int32 num_sent_packets;
+    int32 curr_idx;
+    int32 size_limit;
+    int32 MAX_STREAMS;
+    int32 id_counter=0;
+    int32 server_stream_counter=0;
+    int32 client_stream_counter=0;
+    int32 largest_acked_time=0;
+    int32 packet_size_limit;
+
+    int32 kPacketThresh=3;
+    int32 kTimeThreshold;
+    uint64 time_of_last_ack_eliciting_packet=0;
+    int32 largest_acked_packet = -1;
+    int32 kGranularity;
+ 
+    int32 pto_count = 0;
+    int32 latest_rtt = 0;
+    int32 smoothed_rtt;
+    int32 rttvar;
+    int32 min_rtt=0;
+    int32 adjusted_rtt;
+    int32 first_rtt_sample=0;
+    int32 loss_time;
+
+    bool update_rtt = false;
+
+    int32 initialWindow = 14720;
+    int32 minimumWindow;
+    float lossReductionFactor = 0.5;
+    int32 persistentCongestionThreshold = 3;
+
+    int32 max_datagram_size;
+    int32 bytes_in_flight=0;
+    int32 congestion_window=0;
+    int32 congestion_recovery_start_time=0;
+    int32 ssthresh=-1;
+    int32 ecn_ce_counters=0;
+
+    int32 ack_delay;
+
+    list<bool> recieved_packets;
+    int32 r_largest_acked;
+
+    list<QuicStreamBuffer> qsbs;
+    int32 qsbs_size = 0;
+
+    int32 move_to_memory_size_thresh = 100;
+    int32 max_stream_per_pkt  = 6;
+
+    int32 max_ack_delay;
+    int32 send_thresh;
+    int32 kPacketThreshold;
+    int32 largest_acked;
+
+    timer_t timer;
+
+    int32 local_ip;
+    int32 remote_ip;
+}
+
+net_to_transp ntt_module {
+    net_header IPheader {
+        uint16 tot_len;
+        uint16 identification;
+        uint3 flags;
+        uint8 ttl;
+        uint8 protocol;
+        uint16 hdrChecksum;
+        uint32 src_ip;
+        uint32 dst_ip;
+    }
+
+    list<event_t> parse_net_packet(pkt_t p, IPheader i) { 
+        list<event_t> out;
+        UDPBP pkt_bp;
+        p.extract(pkt_bp);
+        QUICBP quic_p = p.pkt;
+
+        flow_id id(i.src_ip, i.dst_ip, p.src_port, p.dst_port);     
+        
+        DATA_ARRIVAL d_ev;
+        d_ev.packet_id = quic_p.pkt_id;
+
+        for(int i =0; i< quic_p.frames.size; i++){
+            if(quic_p,frames[i].frameType ==2){
+                ACK ev;
+                ACKFrameBP ackframe = quic_p.frames[i];
+
+                ev.flow_id = ackframe.flow_id;
+                ev.pkt_nums = ackframe.pkt_nums;
+                ev.pkt_nums_counter = ackframe.pkt_nums_counter;
+                ev.largest = ackframe.largest;
+                ev.largest_acked = ackframe.largest_acked;
+                ev.ECT0_Count = ackframe.ECT0_Count;
+                ev.ECT1_Count = ackframe.ECT1_Count;
+                ev.ECN_CE_Count = ackframe.ECN_CE_Count;
+                events.add(ev);
+            }else{
+                d_ev.frames.add(quic_p.frames[i])                
+                d_ev.frames_size = d_ev.frames_size + 1;
+            }
+        }
+        return out;
+    }
+}
+
+
+
+header QuicHeader{
+    int32 pkt_id;
+}
+
+interm_output interm_out {
+    list<QUICBP> pkt;
+    PacketInfo info;
+    list<PacketInfo> lost_packets;
+    int32 num_lost_packets;
+    int32 bytes_allowed;
+    list<Frame> framesOut;
+    int32 frames_size;
+    bool in_congestion;
+    int32 start_time;
+    list<PacketInfo> acked_packets;
+    int32 acked_packets_size = 0;
+    int32 time_sent;
+    bool ack_eliciting;
+    list<ackFrame> framesAck;
+    int32 framesAck_size;
+}
+
+list<instr_t> SetSendParametersProcessor(SEND ev, MyContext ctx, interm_out out){
+    out.bytes_allowed = ctx.congestion_window-ctx.bytes_in_flight;
+}
+
+addRetransmitFramesProcessor(SEND ev, MyContext ctx, interm_out out){
+    for(int i = 0 ; i< ctx.retransmit_frames.size() ; i++){
+        out.frames.add(ctx.retransmit_frames[i])
+        ctx.retransmit_frames.remove(i);
+    }
+}
+
+void addStreamFramesProcessor(SEND ev, MyContext ctx, interm_out out){
+    int32 events_size = 0;
+    int32 sent_size = 0;
+    int32 i = 0;
+    int32 bytes_allowed = out.bytes_allowed;
+    int32 bytes_in_packet = 24;
+    pkt_ev.address = ctx.data_addr;
+    int32 frame_size_limit;
+    if(bytes_allowed / ctx.number_streams > bytes_allowed/ctx.max_stream_per_pkt)
+        frame_size_limit = min(bytes_allowed / ctx.number_streams , ctx.frame_size_limit);
+    else
+        frame_size_limit = ctx.frame_size_limit;
+
+    PacketInfo pkt_info;
+    QuicStream qs;
+    int32 total_bytes = bytes_allowed;
+    for(int j =0; j<total_bytes/ctx.packet_size_limit;j=j+1){
+        QUICBP pkt;
+        while(sent_size<ctx.packet_size_limit && i < ctx.number_streams && bytes_allowed>0 ){
+            qs=ctx.streams[i];
+            StreamFrameBP frame;
+            pkt_info.stream_id[pkt_info.list_size]=i;
+            int32 data_len = qs.frame_size_limit;
+            if(data_len > bytes_allowed)
+                data_len = bytes_allowed;
+            if(data_len > frame_size_limit)
+                data_len = frame_size_limit;
+            if(data_len > qs.length - qs.last_sent)
+                data_len = qs.length - qs.last_sent;
+            frame.data_length = data_len;
+            frame.offset = qs.last_sent;
+            frame.data = data(qs.address, frame.offset);
+            qs.last_sent = qs.last_sent + frame.data_length;
+            pkt.frames.add(frame);
+            pkt.frame_size = out.pkt.frame_size + 1;
+            ctx.bytes_in_flight = ctx.bytes_in_flight + frame.data_length;
+            bytes_allowed = bytes_allowed - frame.data_length;
+            i= i+1;
+            out.ack_eliciting = true;
+        }
+        out.pkt.add(pkt);
+    }
+}
+
+list<instr_t> sendProcessor<T>(T ev, MyContext ctx, interm_out out) {
+    list<instr_t> instr_out;
+    for(int i = 0; i< out.pkt_count ; i++){
+        PacketInfo pkt_info;
+        pkt_info.time_sent=now();
+        pkt_info.in_flight = true;
+        out.pkt.pkt_id = ctx.id_counter+1;
+        ctx.id_counter=ctx.id_counter+1;
+        pkt_info.pkt = out.pkt[i];
+        ctx.sent_packets.add(pkt_info);
+        UDPBP bp;
+        bp.pkt = out[i].pkt;
+        bp.src_port = ctx.src_port;
+        bp.dst_port = ctx.dst_port;
+        bp.length = len(bp);
+        // bp.checksum = CRC16_t();
+
+        instr_t instr = pkt_gen_instr(ctx.local_ip, ctx.remote_ip, pb);
+        instr_out.add(instr);
+    }
+    TIMER timer_event;
+    if (out.ack_eliciting){
+        ctx.time_of_last_ack_eliciting_packet = now();
+        instr_t instr = timer_start_instr(timer, ctx.kTimeThreshold, timer_event); 
+        instr_out.add(instr);
+    }
+    return instr_out;
+}
+
+void ackProcessor(ACK ev, MyContext ctx, interm_out out) {
+    if (ctx.largest_acked_packet == -1)
+        ctx.largest_acked_packet = ev.largest_acked;
+    else{
+        int32 largest_ack_pkt = ctx.largest_acked_packet;
+        if(largest_ack_pkt < ev.largest_acked)
+            largest_ack_pkt = ev.largest_acked;
+        ctx.largest_acked_packet = largest_ack_pkt;
+    }
+    bool new_packet_acked=false;
+    int32 acked_bytes;
+    for(int32 i = 0; i<ev.pkt_nums_counter;i=i+1){
+        for (int32 j = 0; j<ctx.sent_packets.len();j=j+1){
+            if(i==ctx.sent_packets[j].packet_id){
+                if(i == ctx.largest_acked_packet)
+                    ctx.largest_acked_time = ctx.sent_packets[j].time_sent;
+                out.acked_packets[out.acked_packets_size] = ctx.sent_packets[j];
+                out.acked_packets_size = out.acked_packets_size + 1;
+                acked_bytes=acked_bytes+ctx.sent_packets[j].size;
+                for(int32 k = j;k<ctx.sent_packets_size;k=k+1){
+                    ctx.sent_packets[k] = ctx.sent_packets[k+1];
+                }
+                ctx.sent_packets_size = ctx.sent_packets_size -1;
+                new_packet_acked=true;
+                break;
+            }
+        }
+    }
+    ctx.bytes_in_flight =ctx.bytes_in_flight - acked_bytes;
+    if(!new_packet_acked)
+        return;
+
+    ctx.latest_rtt = now() - ctx.largest_acked_time;
+    ctx.update_rtt = true;
+
+    if(ev.ECN_CE_Count>ctx.ecn_ce_counters){
+        ctx.ecn_ce_counters = ev.ECN_CE_Count;
+        out.in_congestion = true;
+        out.start_time = ctx.largest_acked_packet;
+    }
+}
+
+void updateRttProcessor(ACK ev, MyContext ctx, interm_out out) {
+    if(!ctx.update_rtt)
+        return;
+    ctx.update_rtt = false;
+    if (ctx.first_rtt_sample == 0){
+        ctx.min_rtt = ctx.latest_rtt;
+        ctx.smoothed_rtt = ctx.latest_rtt;
+        ctx.rttvar = ctx.latest_rtt / 2;
+        ctx.first_rtt_sample = now();
+        return;
+    }
+
+    int32 rtt = ctx.min_rtt;
+    if(rtt > ctx.latest_rtt)
+        rtt =  ctx.latest_rtt;
+    ctx.min_rtt = rtt;
+
+    int32 delay = ctx.ack_delay;
+    if(delay > ctx.max_ack_delay)
+        delay = ctx.max_ack_delay;
+    ctx.ack_delay = delay;
+
+    ctx.adjusted_rtt = ctx.latest_rtt;
+    if (ctx.latest_rtt >= ctx.min_rtt + ctx.ack_delay)
+        ctx.adjusted_rtt = ctx.latest_rtt - ctx.ack_delay;
+
+    ctx.rttvar = 3/4 * ctx.rttvar + 1/4 * abs(ctx.smoothed_rtt - ctx.adjusted_rtt);
+    ctx.smoothed_rtt = 7/8 * ctx.smoothed_rtt + 1/8 * ctx.adjusted_rtt;
+
+}
+
+void adjustWindowProcessor<T>(T ev, MyContext ctx, interm_out out) {
+    for(int32 i =0;i<out.acked_packets.len();i=i+1){
+        if (out.acked_packets[i].time_sent <= ctx.congestion_recovery_start_time)
+            continue;
+        if(ctx.congestion_window < ctx.ssthresh)
+            ctx.congestion_window = ctx.congestion_window +out.acked_packets[i].size;
+        else
+            ctx.congestion_window = ctx.congestion_window +ctx.max_datagram_size*out.acked_packets[i].size/ctx.congestion_window;
+    }
+}
+
+void congestionProcessor(CONGESTION ev, MyContext ctx, interm_out out) {
+    if (out.time_sent <= ctx.congestion_recovery_start_time||!out.in_congestion)
+        return;
+
+    ctx.congestion_recovery_start_time = now();
+    ctx.ssthresh = ctx.congestion_window * ctx.lossReductionFactor;
+
+    int32 cwnd = ctx.ssthresh;
+    if(cwnd < ctx.minimumWindow)
+        cwnd = ctx.minimumWindow;
+    ctx.congestion_window = cwnd;
+}
+
+list<instr_t> lossDetectionProcessor<T>(T ev, MyContext ctx, interm_out out) {
+
+    list<instr_t> instr_out;
+    list<PacketInfo> lost_packets;
+    int32 lost_packets_size = 0;
+    int32 loss_delay=ctx.kTimeThreshold;
+    int32 loss_threshold = now()-loss_delay;
+    int32 last_loss = 0;
+    for (int32 i=0; i<ctx.sent_packets.len();i=i+1){
+        if(ctx.sent_packets[i].pkt.packet_id > ctx.largest_acked_packet)
+            continue;
+        if(ctx.sent_packets[i].time_sent > loss_threshold || ctx.largest_acked_packet >= ctx.sent_packets[i].pkt.packet_id + ctx.kPacketThreshold){
+            lost_packets[lost_packets_size]=ctx.sent_packets[i];
+            lost_packets_size = lost_packets_size + 1;
+            if(last_loss < ctx.sent_packets[i].time_sent)
+                last_loss = ctx.sent_packets[i].time_sent;
+            for(int32 j=i;j<ctx.sent_packets.len()-1;j=j+1)
+                ctx.sent_packets[j]=ctx.sent_packets[j+1];
+            ctx.sent_packets_size = ctx.sent_packets_size - 1;
+        }
+    }
+
+    out.num_lost_packets = 0;
+    for(int32 i = 0; i < lost_packets_size; i = i + 1) {
+        out.lost_packets[i] = lost_packets[i];
+        out.num_lost_packets = out.num_lost_packets + 1;
+    }
+    if (lost_packets_size > 0){
+        out.in_congestion = true;
+        out.start_time = last_loss;
+    }
+    return events;
+}
+
+void retransmitProcessor<T>(T ev, MyContext ctx, interm_out out) {
+    int32 events_size = 0;
+    if(out.lost_packets.len()==0){
+        return;
+    }
+    for(int32 j=0; j<out.lost_packets.len();j=j+1){
+        PacketInfo lost_packet=out.lost_packets[j];
+        PKT_EVENT pkt_ev;
+        pkt_ev.address = ctx.data_addr;
+        QuicStream qs;
+        PacketInfo pkt_info = lost_packet;
+        out.pkt.add(pkt_info.pkt);
+    }
+
+}
+
+void addStreamProcessor(ADD_DATA ev, MyContext ctx, interm_out out) {
+    QuicStream qs;
+    qs.length = ev.data_length;
+    if(ev.server_stream == true){
+        ctx.server_stream_counter=ctx.server_stream_counter+2;
+        qs.id=ctx.server_stream_counter;
+    }else{
+        ctx.client_stream_counter=ctx.client_stream_counter+2;
+        qs.id=ctx.client_stream_counter;
+    }
+    qs.address=ev.address;
+    ctx.streams[ctx.streams_size] = qs;
+    ctx.streams_size = ctx.streams_size + 1;
+}
+
+
+list<instr_t> storeDataProcessor(DATA_ARRIVAL ev, MyContext ctx, interm_out out) {
+    list<instr_t> instr_out;
+    ctx.recieved_packets[ev.packet_id] = true;
+    if(ev.packet_id > ctx.r_largest_acked)
+        ctx.r_largest_acked = ev.packet_id;     
+
+    for(int32 k = 0; k <  ev.frames_size; k = k + 1){
+        int32 curr_id = -1;
+        for(int32 j = 0; j < ctx.qsbs_size; j = j + 1){
+            if(ctx.qsbs[j].id == ev.frames[k].stream_id){
+                curr_id = j;
+                break;
+            }
+        }
+        if(curr_id==-1){
+            QuicStreamBuffer qsb;
+            qsb.offset = 0;
+            qsb.id = ev.frames[k].stream_id;
+            curr_id = ev.frames[k].stream_id;
+            ctx.qsbs[ctx.qsbs_size] = qsb;
+            ctx.qsbs_size = ctx.qsbs_size + 1;
+        }
+
+        for(int32 i =0; i<ev.frames[k].data_length;i=i+1){
+            int32 buffer_idx = i + ev.frames[k].offset - ctx.qsbs[curr_id].offset;
+            ctx.qsbs[curr_id].received[buffer_idx]= true;
+        }
+
+        instr_t instr = add_data_seg(ev.hold_addr, ev.frames[k].data_length, get_flow_id(ev), ev.frames[k].offset+qsbs.offset);
+        instr_out.add(instr);
+    }
+    return instr_out;
+}
+
+struct AckRange{
+    int32 gap;
+    int32 ack_range_length;
+}
+
+struct ackFrame{
+    int32 frameType;
+    int32 largest_acked;
+    float ack_delay;
+    int32 range_count;
+    int32 first_ack_range;
+    list<AckRange> ack_ranges;
+    int32 ack_ranges_size = 0;
+    int32 ecn_count;
+}
+
+list<instr_t> addACKFramesProcessor(DATA_ARRIVAL ev, MyContext ctx, interm_out out) {
+    ACKFrameBP frame;
+    frame.frameType = 2;
+    if(!out.ack_eliciting){
+        return;
+    }
+    frame.largest_acked = ctx.largest_acked;
+    int32 i = ctx.largest_acked_packet-1;
+    int32 count=0;
+    while(i>= 0) {
+        if(!ctx.recieved_packets[i])
+            break;
+        count=count+1;
+        i = i - 1;
+    }
+    frame.first_ack_range = count;
+    bool count_gap=true;
+    AckRange range;
+    count=0;
+    for(int32 j=i;j>=0;j=j-1){
+        if(count_gap && ctx.recieved_packets[j] == true){
+            range.gap = count;
+            count = 1;
+            count_gap = false;
+        }else if(!count_gap && ctx.recieved_packets[j] == false){
+            range.ack_range_length = count;
+            frame.ack_ranges[frame.ack_ranges_size] = range;
+            frame.ack_ranges_size = frame.ack_ranges_size + 1;
+            count = 1;
+            count_gap = true;
+        }else{
+            count=count+1;
+        }
+    }
+    if(count_gap){
+        range.gap = count;
+    }else{
+        range.ack_range_length = count;
+    }
+    frame.ack_ranges[frame.ack_ranges_size] = range;
+    frame.ack_ranges_size = frame.ack_ranges_size + 1;
+
+    out.pkt.add(frame);
+}
+
+dispatch table{
+    SEND -> {SetSendParametersProcessor, addStreamFramesProcessor, sendProcessor};
+    ACK -> {ackProcessor ,congestionProcessor,updateRttProcessor,lossDetectionProcessor, congestionProcessor,  adjustWindowProcessor,SetSendParametersProcessor, retransmitProcessor, addStreamFramesProcessor, sendProcessor};
+    TIMER -> {lossDetectionProcessor,congestionProcessor,SetSendParametersProcessor,retransmitProcessor, addACKFramesProcessor ,addStreamFramesProcessor, sendProcessor};
+    ADD_DATA -> {addStreamProcessor,addStreamFramesProcessor, sendProcessor};
+
+    DATA_ARRIVAL -> {storeDataProcessor,SetSendParametersProcessor, addACKFramesProcessor, addStreamFramesProcessor,sendProcessor};
+}
